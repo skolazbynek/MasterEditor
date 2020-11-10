@@ -154,3 +154,5 @@ if __name__ == '__main__':
                 log(f'Automatic restart disabled because program has crashed {times_crashed} times since last manual check.')
                 break
 
+Testing GIT BRANCH
+
