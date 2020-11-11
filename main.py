@@ -1,6 +1,7 @@
 import praw
 import datetime
 import time
+import re
 import googleapiclient.discovery
 
 SCHEDULE_TIME_SEC = 1800
@@ -90,6 +91,7 @@ def regular_moderation(subreddit_name='amv'):
             continue
         except StopIteration:
             pass
+
         # Video length checking
         # |- If submission is a link, hopefully to youtube
         if not (submission.is_self or submission.is_video):
@@ -98,16 +100,19 @@ def regular_moderation(subreddit_name='amv'):
             except AttributeError:
                 submission.report('Check manually, link being shared is NOT youtube.')   #If not link to youtube, report for manual check
                 log(f'Submission \"{submission.title}\" ({submission.permalink}) has been reported as the link is not Youtube.')
+                continue
             except IndexError:
                 removal_comment = submission.reply(f'Your submission has been removed. It seems that the Youtube video you\'ve tried to post is inacessible or you\' posted a youtube link that\'s not a video. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
                 removal_comment.mod.distinguish(how='yes', sticky=True)
                 submission.mod.remove()
                 log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed as the Youtube video is unacessible.')
+                continue
             if 'M' not in duration:
                 removal_comment = submission.reply(f'Your submission has been removed, because your video is too short. Please note we accept only videos longer than one minute. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
                 removal_comment.mod.distinguish(how='yes', sticky=True)
                 submission.mod.remove()
                 log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed as the Youtube video is too short.')
+                continue
         # |- If submission is a reddit video
         elif submission.is_video:
             if submission.media['reddit_video']['duration'] <= 60:
@@ -115,8 +120,24 @@ def regular_moderation(subreddit_name='amv'):
                 removal_comment.mod.distinguish(how='yes', sticky=True)
                 submission.mod.remove()
                 log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed as the Reddit video is too short.')
+                continue
 
-            #TODO proper title checking
+        #Title check
+        if re.findall(r'[A-Z]{5}', submission.title):
+            removal_comment = submission.reply(f'Your submission has been removed because you have used too much CAPS LOCK in your title. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
+            removal_comment.mod.distinguish(how='yes', sticky=True)
+            submission.mod.remove()
+            log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed because it had CAPS LOCK in the title.')
+            continue
+        elif re.findall(r'[^\sa-zA-Z0-9,.“”:;\-\'!?|\"&*+/=^_\[\]()]', submission.title):
+            removal_comment = submission.reply(f'Your submission has been removed as it seems you have used non-english characters in your title. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
+            removal_comment.mod.distinguish(how='yes', sticky=True)
+            submission.mod.remove()
+            log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed because it has special characters in the title.')
+            continue
+
+            #TODO copy other stuff from Automod
+            #TODO create a single removal function to tidy up the code
             #TODO account karma/age gate
 
 
@@ -153,6 +174,4 @@ if __name__ == '__main__':
                 log(f'Crashed because of a following error: {e}.')
                 log(f'Automatic restart disabled because program has crashed {times_crashed} times since last manual check.')
                 break
-
-Testing GIT BRANCH
 
