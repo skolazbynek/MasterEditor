@@ -3,17 +3,24 @@ import datetime
 import time
 import re
 import googleapiclient.discovery
+import keyring
+
+# PASSWORDS
+CLIENT_ID = keyring.get_password('MasterEditor', 'cleint-id')
+CLIENT_SECRET = keyring.get_password('MasterEditor', 'client-secret')
+REDDIT_PASSWORD = keyring.get_password('MasterEditor', 'reddit-password')
+YOUTUBE_KEY = keyring.get_password('MasterEditor', 'youtube-key')
 
 SCHEDULE_TIME_SEC = 1800
 
 
 def initialize_reddit():
     #TODO hide passwords/tokens from code
-    return praw.Reddit(client_id='BLgzbnxQYUELfg',
-                       client_secret='-DOj-weh83O0EtikUraqbHRh7PM',
+    return praw.Reddit(client_id=CLIENT_ID,
+                       client_secret=CLIENT_SECRET,
                        user_agent='AMVBot:v0.0.0 (by u/Zbynasuper)',
                        username='I_Like_Good_AMVs',
-                       password='AMVEditor20')
+                       password=REDDIT_PASSWORD)
 
 
 def post_feedback_megathread(subreddit_name='amv'):
@@ -53,7 +60,6 @@ def post_feedback_megathread(subreddit_name='amv'):
 
 
 def check_youtube_video_length(videoURL):
-    #TODO Hide Google API token
     if '//youtu.be' in videoURL:
         _, _, videoID = videoURL.rpartition('//youtu.be/')
     elif 'youtube' in videoURL:
@@ -62,7 +68,7 @@ def check_youtube_video_length(videoURL):
     else:
         raise AttributeError('Link is not a youtube video.')
 
-    youtube = googleapiclient.discovery.build('youtube', 'v3', developerKey='AIzaSyB_MKa0Zm0CcOu1GtadJCkrnzZU-m5qggM')
+    youtube = googleapiclient.discovery.build('youtube', 'v3', developerKey=YOUTUBE_KEY)
     request = youtube.videos().list(part='contentDetails', id=videoID)
     response = request.execute()
 
@@ -138,7 +144,7 @@ def regular_moderation(subreddit_name='amv'):
 
             #TODO copy other stuff from Automod
             #TODO create a single removal function to tidy up the code
-            #TODO account karma/age gate
+            #TODO account karma/age gate - number of comments in subreddit in last 6 months
 
 
 def log(log_message):
