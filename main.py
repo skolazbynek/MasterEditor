@@ -1,25 +1,29 @@
-import praw
 import datetime
 import time
 import re
+import sys, getopt
+
+import praw
 import googleapiclient.discovery
 import keyring
 
-# PASSWORDS
-CLIENT_ID = keyring.get_password('MasterEditor', 'cleint-id')
+# GLOBAL VARIABLES
+#   FLAGS
+TEST_MODE = True
+#   PASSWORDS
+CLIENT_ID = keyring.get_password('MasterEditor', 'client-id')
 CLIENT_SECRET = keyring.get_password('MasterEditor', 'client-secret')
 REDDIT_PASSWORD = keyring.get_password('MasterEditor', 'reddit-password')
+REDDIT_USERNAME = keyring.get_password('MasterEditor', 'reddit-username')
 YOUTUBE_KEY = keyring.get_password('MasterEditor', 'youtube-key')
 
 SCHEDULE_TIME_SEC = 1800
 
-
 def initialize_reddit():
-    #TODO hide passwords/tokens from code
     return praw.Reddit(client_id=CLIENT_ID,
                        client_secret=CLIENT_SECRET,
                        user_agent='AMVBot:v0.0.0 (by u/Zbynasuper)',
-                       username='I_Like_Good_AMVs',
+                       username=REDDIT_USERNAME,
                        password=REDDIT_PASSWORD)
 
 
@@ -76,7 +80,22 @@ def check_youtube_video_length(videoURL):
     return duration
 
 
+def remove_submission(submission, reason):
+    if TEST_MODE:
+        log(f'The submission {submission.title} ({submission.shortlink}) would be removed because of: {reason}, but test mode is ON.')
+        return True
+    log(f'The submission {submission.title} ({submission.shortlink}) was removed because: {reason}')
+    removal_comment = submission.reply(f'Your submission has been removed because of following reason: {reason}'
+                                       f'\n '
+                                       f'\n Beep Boop, this action was perfomed by a bot. If you believe this was a mistake, please message the moderators of this subreddit with a link to this submission.')
+    removal_comment.mod.distinguish(how='yes', sticky=True)
+    submission.mod.remove()
+    return True
+
+
 def regular_moderation(subreddit_name='amv'):
+    if TEST_MODE:
+        log('Warning: Running in test mode! There will be no actual changes done to the subreddit!')
     subreddit = initialize_reddit().subreddit(subreddit_name)
 
     # Idea for polling submissions:
@@ -99,7 +118,7 @@ def regular_moderation(subreddit_name='amv'):
             pass
 
         # Video length checking
-        # |- If submission is a link, hopefully to youtube
+        #   If submission is a link, hopefully to youtube
         if not (submission.is_self or submission.is_video):
             try:
                 duration = check_youtube_video_length(submission.url)
@@ -108,42 +127,26 @@ def regular_moderation(subreddit_name='amv'):
                 log(f'Submission \"{submission.title}\" ({submission.permalink}) has been reported as the link is not Youtube.')
                 continue
             except IndexError:
-                removal_comment = submission.reply(f'Your submission has been removed. It seems that the Youtube video you\'ve tried to post is inacessible or you\' posted a youtube link that\'s not a video. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
-                removal_comment.mod.distinguish(how='yes', sticky=True)
-                submission.mod.remove()
-                log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed as the Youtube video is unacessible.')
+                remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
                 continue
             if 'M' not in duration:
-                removal_comment = submission.reply(f'Your submission has been removed, because your video is too short. Please note we accept only videos longer than one minute. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
-                removal_comment.mod.distinguish(how='yes', sticky=True)
-                submission.mod.remove()
-                log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed as the Youtube video is too short.')
+                remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
                 continue
-        # |- If submission is a reddit video
+        #   If submission is a reddit video
         elif submission.is_video:
             if submission.media['reddit_video']['duration'] <= 60:
-                removal_comment = submission.reply(f'Your submission has been removed, because your video is too short. Please note we accept only videos longer than one minute. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
-                removal_comment.mod.distinguish(how='yes', sticky=True)
-                submission.mod.remove()
-                log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed as the Reddit video is too short.')
+                remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
                 continue
 
-        #Title check
+        # Title check
         if re.findall(r'[A-Z]{5}', submission.title):
-            removal_comment = submission.reply(f'Your submission has been removed because you have used too much CAPS LOCK in your title. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
-            removal_comment.mod.distinguish(how='yes', sticky=True)
-            submission.mod.remove()
-            log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed because it had CAPS LOCK in the title.')
+            remove_submission(submission, 'Title contains excessive Caps Lock.')
             continue
         elif re.findall(r'[^\sa-zA-Z0-9,.“”:;\-\'!?|\"&*+/=^_\[\]()]', submission.title):
-            removal_comment = submission.reply(f'Your submission has been removed as it seems you have used non-english characters in your title. \n \n This action was performed by a bot. If you think your submission was removed unfairly, please contact moderators with a link to this submission. Do not reply to this comment.')
-            removal_comment.mod.distinguish(how='yes', sticky=True)
-            submission.mod.remove()
-            log(f'Submission \"{submission.title}\" ({submission.permalink}) has been removed because it has special characters in the title.')
+            remove_submission(submission, 'Non-standard and\or non-english characters used in the title.')
             continue
 
             #TODO copy other stuff from Automod
-            #TODO create a single removal function to tidy up the code
             #TODO account karma/age gate - number of comments in subreddit in last 6 months
 
 
@@ -161,6 +164,12 @@ def log(log_message):
 
 
 if __name__ == '__main__':
+    # Reading command-line arguments
+    options, _ = getopt.getopt(sys.argv[1:], 't')
+    for opt, _ in options:
+        if ['-t'] in opt:
+            TEST_MODE = True
+
     log('Starting up...')
     times_crashed = 0
     while True:
