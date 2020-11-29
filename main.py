@@ -9,7 +9,7 @@ import keyring
 
 # GLOBAL VARIABLES
 #   FLAGS
-TEST_MODE = True
+TEST_MODE = False
 #   PASSWORDS
 CLIENT_ID = keyring.get_password('MasterEditor', 'client-id')
 CLIENT_SECRET = keyring.get_password('MasterEditor', 'client-secret')
@@ -130,12 +130,14 @@ def regular_moderation(subreddit_name='amv'):
                 remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
                 continue
             if 'M' not in duration:
-                remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
+                remove_submission(submission, (f'Video is too short. We only allow videos longer than 1 minute on the main page. \n'
+                                               f'To post such video, go to r/edits.'))
                 continue
         #   If submission is a reddit video
         elif submission.is_video:
             if submission.media['reddit_video']['duration'] <= 60:
-                remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
+                remove_submission(submission, (f'Video is too short. We only allow videos longer than 1 minute on the main page. \n'
+                                               f'To post such video, go to r/edits.'))
                 continue
 
         # Title check
