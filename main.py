@@ -1,7 +1,7 @@
 import datetime
 import time
 import re
-import sys, getopt
+import sys, argparse
 
 import praw
 import googleapiclient.discovery
@@ -9,7 +9,8 @@ import keyring
 
 # GLOBAL VARIABLES
 #   FLAGS
-TEST_MODE = True
+
+TEST_MODE = False
 #   PASSWORDS
 CLIENT_ID = keyring.get_password('MasterEditor', 'client-id')
 CLIENT_SECRET = keyring.get_password('MasterEditor', 'client-secret')
@@ -20,11 +21,19 @@ YOUTUBE_KEY = keyring.get_password('MasterEditor', 'youtube-key')
 SCHEDULE_TIME_SEC = 1800
 
 def initialize_reddit():
-    return praw.Reddit(client_id=CLIENT_ID,
+    try:
+        reddit = praw.Reddit(client_id=CLIENT_ID,
                        client_secret=CLIENT_SECRET,
                        user_agent='AMVBot:v0.0.0 (by u/Zbynasuper)',
                        username=REDDIT_USERNAME,
                        password=REDDIT_PASSWORD)
+    except praw.exceptions.RedditAPIException as exception:
+        for subexception in exception.items:
+            log(f'Reddit initialization failed. Error: {subexception.error_type}')
+    return reddit
+
+
+    return
 
 
 def post_feedback_megathread(subreddit_name='amv'):
@@ -92,10 +101,26 @@ def remove_submission(submission, reason):
     submission.mod.remove()
     return True
 
+def author_activity_check(submission):
+    if TEST_MODE:
+        log('Performing check for author\'s past activity on subreddit.')
+    author = submission.author
+    comment_count = 0
+    try:
+        for comment in author.comments.new(limit=None):
+            if comment.subreddit_id == 't5_2qpg3':
+                if TEST_MODE:
+                    log(f'A comment has been found on submission {comment.submission.title} - ({comment.submission.shortlink}).')
+                comment_count += 1
+                if comment_count == 6:
+                    return True
+            elif int(comment.created_utc)+15778800 <= int(time.time()): #If the comment is older than 6 months
+                return False
+    except StopIteration:
+        return False
+
 
 def regular_moderation(subreddit_name='amv'):
-    if TEST_MODE:
-        log('Warning: Running in test mode! There will be no actual changes done to the subreddit!')
     subreddit = initialize_reddit().subreddit(subreddit_name)
 
     # Idea for polling submissions:
@@ -125,7 +150,6 @@ def regular_moderation(subreddit_name='amv'):
             except AttributeError:
                 submission.report('Check manually, link being shared is NOT youtube.')   #If not link to youtube, report for manual check
                 log(f'Submission \"{submission.title}\" ({submission.permalink}) has been reported as the link is not Youtube.')
-                continue
             except IndexError:
                 remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
                 continue
@@ -152,24 +176,43 @@ def regular_moderation(subreddit_name='amv'):
 
 def log(log_message):
     print(log_message)
+    if args.test:
+        log_file = f'bot_logging_test_{datetime.date.today().strftime("%d_%m_%y")}' #if TEST_MODE then log into separate file
+    else:
+        log_file = 'bot_logging.txt'
     try:
-        with open('bot_logging.txt', 'a') as file:
+        with open(log_file, 'a') as file:
             x = datetime.datetime.now()
             file.write(f'{x.strftime("%d %b %Y  %H:%M:%S")}  -  {log_message}\n')
     except FileNotFoundError:
-        with open('bot_logging.txt', 'w+') as file:
+        with open(log_file, 'w+') as file:
             pass
         log(log_message)
     return True
 
 
 if __name__ == '__main__':
-    # Reading command-line arguments
-    options, _ = getopt.getopt(sys.argv[1:], 't')
-    for opt, _ in options:
-        if ['-t'] in opt:
-            TEST_MODE = True
+    # Parsing command-line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-t', '--test', action='store_true', help='Runs in a test mode and won\'t make any modifications. Also logs to a separate log file (unless -l is specified). Implies -v.')
+    parser.add_argument('-l', '--logging-file', help='Specifies a separate logging file. If it doesn\' exist, it will be created. If it exists, additional logs will be appended to it.')
+    parser.add_argument('-s', '--submission', help='Runs only one test moderation cycle against a submission specified by it\'s ID.')
+    parser.add_argument('-S', '--submission-test', help='Same as -s with automatic test mode -t (and -v logging)')
+    parser.add_argument('-v', '--verbosity', action='store_true', help='Makes the program log more stuff. Useful only for debugging/testing.')
+    args = parser.parse_args()
 
+    if args.submission_test:
+        args.submission = args.submission_test
+        args.test = True
+    if args.test:
+        log(f'Warning: Running in test mode! There will be no changes done to the subreddit!\n')
+        args.verbosity = True
+    if args.logging_file:
+        log(f'Logs will be save to file {args.logging_file}.txt')
+    if args.submission:
+        log(f'Running only one moderation loop against submission ID {args.submission}')
+
+    # Running the main loop, restarts itself up to two times before collapsing in blood on the floor for good.
     log('Starting up...')
     times_crashed = 0
     while True:
@@ -179,6 +222,7 @@ if __name__ == '__main__':
             log('Shutting down...')
             break
         except Exception as e:
+            times_crashed += 1
             if times_crashed <= 2:
                 log(f'Crashed because of a following error: {e}.')
                 log(f'Will try to restart in 5 minutes')
