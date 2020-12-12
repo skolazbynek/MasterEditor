@@ -8,9 +8,6 @@ import googleapiclient.discovery
 import keyring
 
 # GLOBAL VARIABLES
-#   FLAGS
-
-TEST_MODE = False
 #   PASSWORDS
 CLIENT_ID = keyring.get_password('MasterEditor', 'client-id')
 CLIENT_SECRET = keyring.get_password('MasterEditor', 'client-secret')
@@ -18,8 +15,11 @@ REDDIT_PASSWORD = keyring.get_password('MasterEditor', 'reddit-password')
 REDDIT_USERNAME = keyring.get_password('MasterEditor', 'reddit-username')
 YOUTUBE_KEY = keyring.get_password('MasterEditor', 'youtube-key')
 
+#   UTILITIES
 SCHEDULE_TIME_SEC = 1800
+ACTIVITY_CHECK = False
 
+# FUNCTIONS
 def initialize_reddit():
     try:
         reddit = praw.Reddit(client_id=CLIENT_ID,
@@ -73,6 +73,8 @@ def post_feedback_megathread(subreddit_name='amv'):
 
 
 def check_youtube_video_length(videoURL):
+    if args.verbosity:
+        log(f'Checking length of video at address {videoURL}.')
     if '//youtu.be' in videoURL:
         _, _, videoID = videoURL.rpartition('//youtu.be/')
     elif 'youtube' in videoURL:
@@ -86,11 +88,13 @@ def check_youtube_video_length(videoURL):
     response = request.execute()
 
     duration = response['items'][0]['contentDetails']['duration']
+    if args.verbosity:
+        log(f'Duration of the video: {duration}')
     return duration
 
 
 def remove_submission(submission, reason):
-    if TEST_MODE:
+    if args.test:
         log(f'The submission {submission.title} ({submission.shortlink}) would be removed because of: {reason}, but test mode is ON.')
         return True
     log(f'The submission {submission.title} ({submission.shortlink}) was removed because: {reason}')
@@ -102,17 +106,19 @@ def remove_submission(submission, reason):
     return True
 
 def author_activity_check(submission):
-    if TEST_MODE:
+    if args.verbosity:
         log('Performing check for author\'s past activity on subreddit.')
     author = submission.author
     comment_count = 0
     try:
         for comment in author.comments.new(limit=None):
             if comment.subreddit_id == 't5_2qpg3':
-                if TEST_MODE:
+                if args.verbosity:
                     log(f'A comment has been found on submission {comment.submission.title} - ({comment.submission.shortlink}).')
                 comment_count += 1
                 if comment_count == 6:
+                    if args.verbosity:
+                        log('Author has passed the activity check.')
                     return True
             elif int(comment.created_utc)+15778800 <= int(time.time()): #If the comment is older than 6 months
                 return False
@@ -120,55 +126,80 @@ def author_activity_check(submission):
         return False
 
 
-def regular_moderation(subreddit_name='amv'):
-    subreddit = initialize_reddit().subreddit(subreddit_name)
-
-    # Idea for polling submissions:
-    # Poll one submission at a time in some interval (5 minutes) from first and save the first one (most recent) submission ID.
-    # On each submission check, if it's ID is the same as previous saved ID (most recent submission from last check)
-    # Once this check is true, it means we got to a submission that was checked last cycle and all after are also already checked.
-    # Replace the old "most recent ID" with the new most recent submission ID to check against it on the next cycle.
-
-    for submission in subreddit.stream.submissions():
+def regular_moderation(submission):
+        if args.verbosity:
+            log(f'Running moderation loop on submission {submission.title} - ({submission.shortlink})\n'
+                f'Checking if the submission is from a mod, approved contributor or already approved manually.')
         # If it's approved, from a moderator or approved submitter, then don't moderate it
         author = submission.author
         mod_check = subreddit.moderator(redditor=author)
         contributor_check = subreddit.contributor(redditor=author)
         if submission.approved or (mod_check.children.__len__() > 0):
-            continue
+            if args.verbosity:
+                log('Not moderating, moving on...')
+            return True
+
         try:
             next(contributor_check)
-            continue
+            if args.verbosity:
+                log('Not moderating, moving on...')
+            return True
         except StopIteration:
+            if args.verbosity:
+                log('Passing submission to moderation.')
             pass
+
+        if not author_activity_check(submission):
+            if ACTIVITY_CHECK:
+                remove_submission(submission, 'You have less than 6 comments in last 6 months on this subreddit.')
+                return True
+            elif args.verbosity:
+                log('Author\'s activity check has failed, but the feature is not yet active so moving on...')
+
+
+        if args.verbosity:
+            log('Checking account age.')
+        if (int(time.time()) - author.created_utc) < 259200:    #Account younger than 3 days
+            remove_submission(submission, f'Your account needs to be at least 3 days old to be able to post on the main page. \n'
+                                          f'If you are not posting an AMV and need an exception (e.g. contest announcement), please message the mods.')
+            return True
 
         # Video length checking
         #   If submission is a link, hopefully to youtube
         if not (submission.is_self or submission.is_video):
+            if args.verbosity:
+                log('Submission is a link, checking if it\'s a video and it\'s length.')
             try:
                 duration = check_youtube_video_length(submission.url)
             except AttributeError:
                 submission.report('Check manually, link being shared is NOT youtube.')   #If not link to youtube, report for manual check
-                log(f'Submission \"{submission.title}\" ({submission.permalink}) has been reported as the link is not Youtube.')
+                log(f'Submission \"{submission.title}\" ({submission.shortlink}) has been reported as the link is not Youtube.')
             except IndexError:
                 remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
-                continue
+                return True
             if 'M' not in duration:
                 remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
-                continue
+                return True
         #   If submission is a reddit video
         elif submission.is_video:
+            if args.verbosity:
+                log('Submission is a reddit video, checking length.')
             if submission.media['reddit_video']['duration'] <= 60:
                 remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
-                continue
+                return True
 
         # Title check
+        if args.verbosity:
+            log('Checking title of the submission.')
         if re.findall(r'[A-Z]{5}', submission.title):
             remove_submission(submission, 'Title contains excessive Caps Lock.')
-            continue
+            return True
         elif re.findall(r'[^\sa-zA-Z0-9,.“”:;\-\'!?|\"&*+/=^_\[\]()]', submission.title):
             remove_submission(submission, 'Non-standard and\or non-english characters used in the title.')
-            continue
+            return True
+
+        if args.verbosity:
+            log('Passed all checks, moving on...')
 
             #TODO copy other stuff from Automod
             #TODO account karma/age gate - number of comments in subreddit in last 6 months
@@ -176,8 +207,10 @@ def regular_moderation(subreddit_name='amv'):
 
 def log(log_message):
     print(log_message)
-    if args.test:
-        log_file = f'bot_logging_test_{datetime.date.today().strftime("%d_%m_%y")}' #if TEST_MODE then log into separate file
+    if args.logging_file:
+        log_file = f'{args.logging_file}.txt'
+    elif args.verbosity:
+        log_file = f'bot_logging_test_{datetime.date.today().strftime("%d_%m_%y")}.txt' #if -t then log into separate file
     else:
         log_file = 'bot_logging.txt'
     try:
@@ -199,13 +232,14 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--submission', help='Runs only one test moderation cycle against a submission specified by it\'s ID.')
     parser.add_argument('-S', '--submission-test', help='Same as -s with automatic test mode -t (and -v logging)')
     parser.add_argument('-v', '--verbosity', action='store_true', help='Makes the program log more stuff. Useful only for debugging/testing.')
+    parser.add_argument('-r', '--subreddit-name', help='Specifies a subreddit to run on. Default = r/amv.', default='amv')
     args = parser.parse_args()
 
     if args.submission_test:
         args.submission = args.submission_test
         args.test = True
     if args.test:
-        log(f'Warning: Running in test mode! There will be no changes done to the subreddit!\n')
+        log(f'Warning: Running in test mode! There will be no changes done to the subreddit!')
         args.verbosity = True
     if args.logging_file:
         log(f'Logs will be save to file {args.logging_file}.txt')
@@ -213,11 +247,34 @@ if __name__ == '__main__':
         log(f'Running only one moderation loop against submission ID {args.submission}')
 
     # Running the main loop, restarts itself up to two times before collapsing in blood on the floor for good.
-    log('Starting up...')
     times_crashed = 0
+    reddit = initialize_reddit()
+    subreddit = reddit.subreddit(args.subreddit_name)
+    if args.verbosity:
+        log(f'Subreddit {args.subreddit_name} initialized.')
+
+    if args.submission:
+        submission = initialize_reddit().submission(id=args.submission)
+        try:
+            submission.title
+        except:
+            log(f'Wrong ID {args.submission} passed as argument to option -s (-submission).')
+            sys.exit(1)
+        regular_moderation(submission)
+        if args.verbosity:
+            log('Shutting down due to -s option...')
+        sys.exit(0)
+
+        # Idea for polling submissions:
+        # Poll one submission at a time in some interval (5 minutes) from first and save the first one (most recent) submission ID.
+        # On each submission check, if it's ID is the same as previous saved ID (most recent submission from last check)
+        # Once this check is true, it means we got to a submission that was checked last cycle and all after are also already checked.
+        # Replace the old "most recent ID" with the new most recent submission ID to check against it on the next cycle.
+
     while True:
         try:
-            regular_moderation()
+            for submission in subreddit.stream.submissions():
+                regular_moderation(submission)
         except KeyboardInterrupt:
             log('Shutting down...')
             break
