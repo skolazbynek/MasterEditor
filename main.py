@@ -16,7 +16,6 @@ REDDIT_USERNAME = keyring.get_password('MasterEditor', 'reddit-username')
 YOUTUBE_KEY = keyring.get_password('MasterEditor', 'youtube-key')
 
 #   UTILITIES
-SCHEDULE_TIME_SEC = 1800
 ACTIVITY_CHECK = False
 
 # FUNCTIONS
@@ -31,10 +30,6 @@ def initialize_reddit():
         for subexception in exception.items:
             log(f'Reddit initialization failed. Error: {subexception.error_type}')
     return reddit
-
-
-    return
-
 
 def post_feedback_megathread(subreddit_name='amv'):
     reddit = initialize_reddit()
@@ -171,15 +166,17 @@ def regular_moderation(submission):
                 log('Submission is a link, checking if it\'s a video and it\'s length.')
             try:
                 duration = check_youtube_video_length(submission.url)
+                if 'M' not in duration:
+                    remove_submission(submission,
+                                      'Video is too short. We only allow videos longer than 1 minute on the main page.')
+                    return True
             except AttributeError:
                 submission.report('Check manually, link being shared is NOT youtube.')   #If not link to youtube, report for manual check
                 log(f'Submission \"{submission.title}\" ({submission.shortlink}) has been reported as the link is not Youtube.')
             except IndexError:
                 remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
                 return True
-            if 'M' not in duration:
-                remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
-                return True
+
         #   If submission is a reddit video
         elif submission.is_video:
             if args.verbosity:
@@ -209,7 +206,7 @@ def log(log_message):
     print(log_message)
     if args.logging_file:
         log_file = f'{args.logging_file}.txt'
-    elif args.verbosity:
+    elif args.verbosity or args.test:
         log_file = f'bot_logging_test_{datetime.date.today().strftime("%d_%m_%y")}.txt' #if -t then log into separate file
     else:
         log_file = 'bot_logging.txt'
@@ -238,15 +235,22 @@ if __name__ == '__main__':
     if args.submission_test:
         args.submission = args.submission_test
         args.test = True
+
+    #Log bootup message here because logging file depends on args.test that might be changed above by args.submission_test
+    log(f'\n'
+        f'********************************************'
+        f'              STARTING UP                   '
+        f'********************************************'
+        f'\n')
+
     if args.test:
-        log(f'Warning: Running in test mode! There will be no changes done to the subreddit!')
         args.verbosity = True
+        log(f'Warning: Running in test mode! There will be no changes done to the subreddit!')
     if args.logging_file:
         log(f'Logs will be save to file {args.logging_file}.txt')
     if args.submission:
         log(f'Running only one moderation loop against submission ID {args.submission}')
 
-    # Running the main loop, restarts itself up to two times before collapsing in blood on the floor for good.
     times_crashed = 0
     reddit = initialize_reddit()
     subreddit = reddit.subreddit(args.subreddit_name)
@@ -271,6 +275,7 @@ if __name__ == '__main__':
         # Once this check is true, it means we got to a submission that was checked last cycle and all after are also already checked.
         # Replace the old "most recent ID" with the new most recent submission ID to check against it on the next cycle.
 
+    # Running the main loop, restarts itself up to two times before collapsing in blood on the floor for good.
     while True:
         try:
             for submission in subreddit.stream.submissions():
