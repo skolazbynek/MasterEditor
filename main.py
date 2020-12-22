@@ -17,19 +17,22 @@ YOUTUBE_KEY = keyring.get_password('MasterEditor', 'youtube-key')
 
 #   UTILITIES
 ACTIVITY_CHECK = False
+FORCE_DAILY_CHECK = False
+
 
 # FUNCTIONS
 def initialize_reddit():
     try:
         reddit = praw.Reddit(client_id=CLIENT_ID,
-                       client_secret=CLIENT_SECRET,
-                       user_agent='AMVBot:v0.0.0 (by u/Zbynasuper)',
-                       username=REDDIT_USERNAME,
-                       password=REDDIT_PASSWORD)
+                             client_secret=CLIENT_SECRET,
+                             user_agent='AMVBot:v0.0.0 (by u/Zbynasuper)',
+                             username=REDDIT_USERNAME,
+                             password=REDDIT_PASSWORD)
     except praw.exceptions.RedditAPIException as exception:
         for subexception in exception.items:
             log(f'Reddit initialization failed. Error: {subexception.error_type}')
     return reddit
+
 
 def post_feedback_megathread(subreddit_name='amv'):
     reddit = initialize_reddit()
@@ -65,6 +68,7 @@ def post_feedback_megathread(subreddit_name='amv'):
     new_button['url'] = megathread.url
     new_button.pop('_reddit')
     widget.mod.update(buttons=[new_button])
+    return megathread
 
 
 def check_youtube_video_length(videoURL):
@@ -100,6 +104,7 @@ def remove_submission(submission, reason):
     submission.mod.remove()
     return True
 
+
 def author_activity_check(submission):
     if args.verbosity:
         log('Performing check for author\'s past activity on subreddit.')
@@ -115,91 +120,109 @@ def author_activity_check(submission):
                     if args.verbosity:
                         log('Author has passed the activity check.')
                     return True
-            elif int(comment.created_utc)+15778800 <= int(time.time()): #If the comment is older than 6 months
+            elif int(comment.created_utc) + 15778800 <= int(time.time()):  # If the comment is older than 6 months
                 return False
     except StopIteration:
         return False
 
 
+def daily_checks():
+    if args.verbosity:
+        log('Performing daily checks.')
+    # Checks for a first day in a month
+    today = datetime.date.today()
+    if today.day == 1:
+        megathread = post_feedback_megathread()
+        log(f'Feedback MEGAthread posted: ({megathread.shortlink})')
+    return True
+
+
 def regular_moderation(submission):
+    if args.verbosity:
+        log(f'Running moderation loop on submission {submission.title} - ({submission.shortlink})\n'
+            f'Checking if the submission is from a mod, approved contributor or already approved manually.')
+    # If it's approved, from a moderator or approved submitter, then don't moderate it
+    author = submission.author
+    mod_check = subreddit.moderator(redditor=author)
+    contributor_check = subreddit.contributor(redditor=author)
+    if submission.approved or (mod_check.children.__len__() > 0):
         if args.verbosity:
-            log(f'Running moderation loop on submission {submission.title} - ({submission.shortlink})\n'
-                f'Checking if the submission is from a mod, approved contributor or already approved manually.')
-        # If it's approved, from a moderator or approved submitter, then don't moderate it
-        author = submission.author
-        mod_check = subreddit.moderator(redditor=author)
-        contributor_check = subreddit.contributor(redditor=author)
-        if submission.approved or (mod_check.children.__len__() > 0):
-            if args.verbosity:
-                log('Not moderating, moving on...')
-            return True
+            log('Not moderating, moving on...')
+        return True
 
+    try:
+        next(contributor_check)
+        if args.verbosity:
+            log('Not moderating, moving on...')
+        return True
+    except StopIteration:
+        if args.verbosity:
+            log('Passing submission to moderation.')
+        pass
+
+    if not author_activity_check(submission):
+        if ACTIVITY_CHECK:
+            remove_submission(submission, 'You have less than 6 comments in last 6 months on this subreddit.')
+            return True
+        elif args.verbosity:
+            log('Author\'s activity check has failed, but the feature is not yet active so moving on...')
+
+    if args.verbosity:
+        log('Checking account age.')
+    if (int(time.time()) - author.created_utc) < 259200:  # Account younger than 3 days
+        remove_submission(submission,
+                          f'Your account needs to be at least 3 days old to be able to post on the main page. \n'
+                          f'If you are not posting an AMV and need an exception (e.g. contest announcement), please message the mods.')
+        return True
+
+    # Video length checking
+    #   If submission is a link, hopefully to youtube
+    if not (submission.is_self or submission.is_video):
+        if args.verbosity:
+            log('Submission is a link, checking if it\'s a video and it\'s length.')
         try:
-            next(contributor_check)
-            if args.verbosity:
-                log('Not moderating, moving on...')
-            return True
-        except StopIteration:
-            if args.verbosity:
-                log('Passing submission to moderation.')
-            pass
-
-        if not author_activity_check(submission):
-            if ACTIVITY_CHECK:
-                remove_submission(submission, 'You have less than 6 comments in last 6 months on this subreddit.')
+            duration = check_youtube_video_length(submission.url)
+            if 'M' not in duration:
+                remove_submission(submission,'Video is too short. We only allow videos longer than 1 minute on the main page.')
                 return True
-            elif args.verbosity:
-                log('Author\'s activity check has failed, but the feature is not yet active so moving on...')
-
-
-        if args.verbosity:
-            log('Checking account age.')
-        if (int(time.time()) - author.created_utc) < 259200:    #Account younger than 3 days
-            remove_submission(submission, f'Your account needs to be at least 3 days old to be able to post on the main page. \n'
-                                          f'If you are not posting an AMV and need an exception (e.g. contest announcement), please message the mods.')
+        except AttributeError:
+            submission.report(
+                'Check manually, link being shared is NOT youtube.')  # If not link to youtube, report for manual check
+            log(f'Submission \"{submission.title}\" ({submission.shortlink}) has been reported as the link is not Youtube.')
+        except IndexError:
+            remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
             return True
 
-        # Video length checking
-        #   If submission is a link, hopefully to youtube
-        if not (submission.is_self or submission.is_video):
-            if args.verbosity:
-                log('Submission is a link, checking if it\'s a video and it\'s length.')
-            try:
-                duration = check_youtube_video_length(submission.url)
-                if 'M' not in duration:
-                    remove_submission(submission,
-                                      'Video is too short. We only allow videos longer than 1 minute on the main page.')
-                    return True
-            except AttributeError:
-                submission.report('Check manually, link being shared is NOT youtube.')   #If not link to youtube, report for manual check
-                log(f'Submission \"{submission.title}\" ({submission.shortlink}) has been reported as the link is not Youtube.')
-            except IndexError:
-                remove_submission(submission, 'Youtube video is being blocked or unaccessible.')
-                return True
-
-        #   If submission is a reddit video
-        elif submission.is_video:
-            if args.verbosity:
-                log('Submission is a reddit video, checking length.')
-            if submission.media['reddit_video']['duration'] <= 60:
-                remove_submission(submission, 'Video is too short. We only allow videos longer than 1 minute on the main page.')
-                return True
-
-        # Title check
+    #   If submission is a reddit video
+    elif submission.is_video:
         if args.verbosity:
-            log('Checking title of the submission.')
-        if re.findall(r'[A-Z]{5}', submission.title):
-            remove_submission(submission, 'Title contains excessive Caps Lock.')
-            return True
-        elif re.findall(r'[^\sa-zA-Z0-9,.“”:;\-\'!?|\"&*+/=^_\[\]()]', submission.title):
-            remove_submission(submission, 'Non-standard and\or non-english characters used in the title.')
+            log('Submission is a reddit video, checking length.')
+        if submission.media['reddit_video']['duration'] <= 60:
+            remove_submission(submission,
+                              'Video is too short. We only allow videos longer than 1 minute on the main page.')
             return True
 
-        if args.verbosity:
-            log('Passed all checks, moving on...')
+    # Title check
+    if args.verbosity:
+        log('Checking title of the submission.')
+    if re.findall(r'[A-Z]{5}', submission.title):
+        remove_submission(submission, 'Title contains excessive Caps Lock.')
+        return True
+    elif re.findall(r'[^\sa-zA-Z0-9,.“”:;\-\'!?|\"&*+/=^_\[\]()]', submission.title):
+        remove_submission(submission, 'Non-standard and\or non-english characters used in the title.')
+        return True
 
-            #TODO copy other stuff from Automod
-            #TODO account karma/age gate - number of comments in subreddit in last 6 months
+    if args.verbosity:
+        log('Passed all moderation checks, checking if 24 hours passed from last daily check')
+
+    # Run daily checks if at least 24 hours since last check
+    global timer
+    if time.time() - 86400 > timer or FORCE_DAILY_CHECK:
+        timer = time.time()
+        daily_checks()
+
+        # TODO copy other stuff from Automod
+        # TODO account karma/age gate - number of comments in subreddit in last 6 months
 
 
 def log(log_message):
@@ -207,7 +230,7 @@ def log(log_message):
     if args.logging_file:
         log_file = f'{args.logging_file}.txt'
     elif args.verbosity or args.test:
-        log_file = f'bot_logging_test_{datetime.date.today().strftime("%d_%m_%y")}.txt' #if -t then log into separate file
+        log_file = f'bot_logging_test_{datetime.date.today().strftime("%d_%m_%y")}.txt'  # if -t then log into separate file
     else:
         log_file = 'bot_logging.txt'
     try:
@@ -224,19 +247,24 @@ def log(log_message):
 if __name__ == '__main__':
     # Parsing command-line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-t', '--test', action='store_true', help='Runs in a test mode and won\'t make any modifications. Also logs to a separate log file (unless -l is specified). Implies -v.')
-    parser.add_argument('-l', '--logging-file', help='Specifies a separate logging file. If it doesn\' exist, it will be created. If it exists, additional logs will be appended to it.')
-    parser.add_argument('-s', '--submission', help='Runs only one test moderation cycle against a submission specified by it\'s ID.')
+    parser.add_argument('-t', '--test', action='store_true',
+                        help='Runs in a test mode and won\'t make any modifications. Also logs to a separate log file (unless -l is specified). Implies -v.')
+    parser.add_argument('-l', '--logging-file',
+                        help='Specifies a separate logging file. If it doesn\' exist, it will be created. If it exists, additional logs will be appended to it.')
+    parser.add_argument('-s', '--submission',
+                        help='Runs only one test moderation cycle against a submission specified by it\'s ID.')
     parser.add_argument('-S', '--submission-test', help='Same as -s with automatic test mode -t (and -v logging)')
-    parser.add_argument('-v', '--verbosity', action='store_true', help='Makes the program log more stuff. Useful only for debugging/testing.')
-    parser.add_argument('-r', '--subreddit-name', help='Specifies a subreddit to run on. Default = r/amv.', default='amv')
+    parser.add_argument('-v', '--verbosity', action='store_true',
+                        help='Makes the program log more stuff. Useful only for debugging/testing.')
+    parser.add_argument('-r', '--subreddit-name', help='Specifies a subreddit to run on. Default = r/amv.',
+                        default='amv')
     args = parser.parse_args()
 
     if args.submission_test:
         args.submission = args.submission_test
         args.test = True
 
-    #Log bootup message here because logging file depends on args.test that might be changed above by args.submission_test
+    # Log bootup message here because logging file depends on args.test that might be changed above by args.submission_test
     log(f'\n'
         f'********************************************'
         f'              STARTING UP                   '
@@ -257,6 +285,7 @@ if __name__ == '__main__':
     if args.verbosity:
         log(f'Subreddit {args.subreddit_name} initialized.')
 
+    timer = int(time.time())
     if args.submission:
         submission = initialize_reddit().submission(id=args.submission)
         try:
@@ -269,13 +298,8 @@ if __name__ == '__main__':
             log('Shutting down due to -s option...')
         sys.exit(0)
 
-        # Idea for polling submissions:
-        # Poll one submission at a time in some interval (5 minutes) from first and save the first one (most recent) submission ID.
-        # On each submission check, if it's ID is the same as previous saved ID (most recent submission from last check)
-        # Once this check is true, it means we got to a submission that was checked last cycle and all after are also already checked.
-        # Replace the old "most recent ID" with the new most recent submission ID to check against it on the next cycle.
-
     # Running the main loop, restarts itself up to two times before collapsing in blood on the floor for good.
+
     while True:
         try:
             for submission in subreddit.stream.submissions():
@@ -293,6 +317,6 @@ if __name__ == '__main__':
                 continue
             else:
                 log(f'Crashed because of a following error: {e}.')
-                log(f'Automatic restart disabled because program has crashed {times_crashed} times since last manual check.')
+                log(
+                    f'Automatic restart disabled because program has crashed {times_crashed} times since last manual check.')
                 break
-
