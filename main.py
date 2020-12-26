@@ -129,6 +129,9 @@ def author_activity_check(submission):
 def daily_checks():
     if args.verbosity:
         log('Performing daily checks.')
+    # Reset crash counter to avoid unnecessary crashes in a long run
+    global times_crashed
+    times_crashed = 0
     # Checks for a first day in a month
     today = datetime.date.today()
     if today.day == 1:
@@ -317,6 +320,7 @@ if __name__ == '__main__':
                 continue
             else:
                 log(f'Crashed because of a following error: {e}.')
-                log(
-                    f'Automatic restart disabled because program has crashed {times_crashed} times since last manual check.')
+                log(f'Automatic restart disabled because program has crashed {times_crashed} times since last manual check.')
+                admin = reddit.redditor('Zbynasuper')
+                admin.message('MasterEditor has crashed.', 'Hey, your awesome bot has crashed for some reason. Check me out plz.')
                 break
